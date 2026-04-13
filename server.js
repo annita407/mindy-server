@@ -7,7 +7,8 @@ const app = express();
 app.use(express.json());
 
 const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.GROQ_API_KEY,
+  baseURL: "https://api.groq.com/openai/v1",
 });
 
 const upload = multer({ dest: "uploads/" });
@@ -20,12 +21,24 @@ app.post("/analyze-text", async (req, res) => {
   try {
     const { text } = req.body;
 
-    const response = await client.responses.create({
-      model: "gpt-4.1-mini",
-      input: `Convert this into a reminder, note, or calendar event: ${text}`,
+    const completion = await client.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.2,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Convert the user's text into a reminder, note, or calendar event. Be brief and clear.",
+        },
+        {
+          role: "user",
+          content: text,
+        },
+      ],
     });
 
-    res.json({ result: response.output_text });
+    const result = completion.choices?.[0]?.message?.content ?? "";
+    res.json({ result });
   } catch (error) {
     console.error("Text analysis failed:", error);
     res.status(500).json({ error: "Text analysis failed" });
@@ -33,16 +46,18 @@ app.post("/analyze-text", async (req, res) => {
 });
 
 async function analyzeImageWithAI(base64Image) {
-  console.log("Sending image to OpenAI...");
+  console.log("Sending image to Groq...");
 
-  const response = await client.responses.create({
-    model: "gpt-4.1-mini",
-    input: [
+  const completion = await client.chat.completions.create({
+    model: "meta-llama/llama-4-scout-17b-16e-instruct",
+    temperature: 0.1,
+    response_format: { type: "json_object" },
+    messages: [
       {
         role: "user",
         content: [
           {
-            type: "input_text",
+            type: "text",
             text: `
 You are a smart food analysis AI.
 
@@ -75,16 +90,19 @@ Return ONLY valid JSON in this exact format:
 `,
           },
           {
-            type: "input_image",
-            image_url: `data:image/jpeg;base64,${base64Image}`,
+            type: "image_url",
+            image_url: {
+              url: `data:image/jpeg;base64,${base64Image}`,
+            },
           },
         ],
       },
     ],
   });
 
-  console.log("Raw AI output:", response.output_text);
-  return response.output_text;
+  const content = completion.choices?.[0]?.message?.content ?? "";
+  console.log("Raw AI output:", content);
+  return content;
 }
 
 app.post("/analyze-food-photo", upload.single("image"), async (req, res) => {
@@ -98,12 +116,17 @@ app.post("/analyze-food-photo", upload.single("image"), async (req, res) => {
     console.log("Image received:", req.file.originalname || req.file.filename);
     console.log("Image size:", req.file.size);
 
+    if (!req.file.size || req.file.size <= 0) {
+      if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: "Uploaded image is empty" });
+    }
+
     const imageBuffer = fs.readFileSync(req.file.path);
     const base64Image = imageBuffer.toString("base64");
 
     const aiResult = await analyzeImageWithAI(base64Image);
 
-    fs.unlinkSync(req.file.path);
+    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
 
     let parsed;
     try {
@@ -134,15 +157,23 @@ app.post("/analyze-label-photo", upload.single("image"), async (req, res) => {
       return res.status(400).json({ error: "No image uploaded" });
     }
 
-    console.log("Label image received:", req.file.originalname || req.file.filename);
+    console.log(
+      "Label image received:",
+      req.file.originalname || req.file.filename
+    );
     console.log("Image size:", req.file.size);
+
+    if (!req.file.size || req.file.size <= 0) {
+      if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: "Uploaded image is empty" });
+    }
 
     const imageBuffer = fs.readFileSync(req.file.path);
     const base64Image = imageBuffer.toString("base64");
 
     const aiResult = await analyzeImageWithAI(base64Image);
 
-    fs.unlinkSync(req.file.path);
+    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
 
     let parsed;
     try {
